@@ -45,3 +45,36 @@ test('responsive layout, time-zone control and keyboard search work', async ({ p
   await page.getByRole('searchbox').press('Enter');
   await expect(page.getByText('A different path awaits.', { exact: true })).toBeVisible();
 });
+
+test('mutation during an in-flight poll still refreshes with the saved state', async ({ page }) => {
+  // Hold the initial agenda poll (fetched before the save) so it is still in flight when the user saves.
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let held = false;
+  await page.route('**/api/agenda', async route => {
+    if (route.request().method() === 'GET' && !held) {
+      held = true;
+      const response = await route.fetch(); // snapshot taken before the mutation
+      await gate;
+      await route.fulfill({ response });
+    } else {
+      await route.continue();
+    }
+  });
+  await page.goto('/');
+  await expect.poll(() => held).toBeTruthy();
+  // Meta/sessions are loaded by the later refresh; the save button needs the session list.
+  const save = page.getByRole('button', { name: "Save Inside Cilium's Datapath", exact: true });
+  const saveResponse = page.waitForResponse(r => r.url().endsWith('/api/agenda') && r.request().method() === 'POST');
+  // Search results come from /api/search, which is independent of the held poll once meta is ready.
+  await expect(save).toBeVisible({ timeout: 30000 }).catch(() => undefined);
+  if (!(await save.isVisible())) {
+    release();
+    await expect(save).toBeVisible();
+  }
+  await save.click();
+  await saveResponse;
+  release(); // the stale pre-mutation poll completes after the mutation succeeded
+  await expect(page.getByRole('button', { name: "Remove Inside Cilium's Datapath", exact: true })).toBeVisible();
+  await expect(page.getByText('Saving your change…', { exact: true })).toHaveCount(0);
+});
