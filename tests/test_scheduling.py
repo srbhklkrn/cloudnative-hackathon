@@ -70,3 +70,17 @@ def test_optimistic_concurrency(store):
     store.save_agenda("attendee", a, version)
     with pytest.raises(ConcurrentWrite):
         store.save_agenda("attendee", a, version)
+
+
+def test_concurrent_organizer_change_is_rejected(store):
+    first, version = store.get_session("session-01")
+    stale, stale_version = store.get_session("session-01")
+    first.status = "canceled"
+    first.revision += 1
+    store.record_disruption(first, {"id": "event-one"}, version)
+    stale.room = "New room"
+    stale.revision += 1
+    with pytest.raises(ConcurrentWrite):
+        store.record_disruption(stale, {"id": "event-two"}, stale_version)
+    assert store.get_session("session-01")[0].status == "canceled"
+    assert len(store.events) == 1

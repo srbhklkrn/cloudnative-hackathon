@@ -46,6 +46,10 @@ class MemoryStore:
     def all_sessions(self):
         return [s.model_copy(deep=True) for s in self.sessions.values()]
 
+    def get_session(self, sid):
+        session = self.sessions.get(sid)
+        return (session.model_copy(deep=True), session.revision) if session else (None, None)
+
     def search(self, query: str, mode: str = "hybrid") -> list[tuple[Session, float]]:
         if mode == "semantic":
             raise ValueError("Semantic search requires Elasticsearch; local preview is keyword only")
@@ -63,7 +67,9 @@ class MemoryStore:
             raise ConcurrentWrite
         self.agendas[token] = (agenda.model_copy(deep=True), (version or 0) + 1)
 
-    def record_disruption(self, session: Session, event: dict):
+    def record_disruption(self, session: Session, event: dict, version):
+        if self.sessions[session.id].revision != version:
+            raise ConcurrentWrite
         self.events.append(deepcopy(event))
         self.sessions[session.id] = session.model_copy(deep=True)
 
@@ -136,6 +142,13 @@ class ElasticStore:
         result = self.client.search(index=INDICES["sessions"], query={"term": {"demo": True}}, size=100, sort=[{"start": "asc"}, {"id": "asc"}], source_excludes=["semantic_text"])
         return [Session.model_validate(h["_source"]) for h in result["hits"]["hits"]]
 
+    def get_session(self, sid):
+        try:
+            result = self.client.get(index=INDICES["sessions"], id=sid)
+        except NotFoundError:
+            return None, None
+        return Session.model_validate(result["_source"]), (result["_seq_no"], result["_primary_term"])
+
     def search(self, query: str, mode: str = "hybrid") -> list[tuple[Session, float]]:
         with tracer.start_as_current_span("detour.semantic_search" if mode != "keyword" else "detour.keyword_search"):
             if not query.strip():
@@ -177,10 +190,14 @@ class ElasticStore:
         except ConflictError as exc:
             raise ConcurrentWrite from exc
 
-    def record_disruption(self, session: Session, event: dict):
-        # Persist the event before changing the searchable session; expose failures to the caller.
+    def record_disruption(self, session: Session, event: dict, version):
+        # Compare-and-swap prevents lost organizer changes, even during overlapping rollouts.
+        try:
+            self.client.update(index=INDICES["sessions"], id=session.id, doc=session.model_dump(mode="json"),
+                if_seq_no=version[0], if_primary_term=version[1], refresh="wait_for")
+        except ConflictError as exc:
+            raise ConcurrentWrite from exc
         self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True}, refresh="wait_for")
-        self.client.update(index=INDICES["sessions"], id=session.id, doc=session.model_dump(mode="json"), refresh="wait_for")
 
     def disruptions(self):
         result = self.client.search(index=INDICES["disruptions"], query={"bool": {"filter": [{"term": {"demo": True}}],

@@ -28,12 +28,13 @@ def test_unconfigured_elastic_is_unready_but_alive(monkeypatch):
 
 
 def test_conflict_and_anonymous_isolation(client, store):
-    assert save(client, "session-01").status_code == 200
+    first = save(client, "session-01")
+    assert first.status_code == 200
+    assert "HttpOnly" in first.headers["set-cookie"]
     assert save(client, "session-02").status_code == 409
     assert save(client, "session-06").status_code == 200
     with TestClient(create_app(store)) as other:
         assert other.get("/api/agenda").json()["sessions"] == []
-    assert "HttpOnly" in client.get("/api/agenda").request.headers.get("cookie", "") or client.cookies.get("detour_attendee")
 
 
 def test_full_disruption_replan_accept_then_consecutive_cancel(client):
@@ -111,3 +112,34 @@ def test_write_boundaries_and_no_fake_semantic_search(client):
     assert client.post("/api/demo/reset", json={}, headers={"Origin": "https://other.example"}).status_code == 403
     assert client.get("/api/search", params={"mode": "semantic", "q": "kernel"}).status_code == 422
     assert client.get("/api/search").headers["cache-control"] == "no-store"
+
+
+def test_https_edge_origin_and_cookie(monkeypatch, store):
+    monkeypatch.setenv("DETOUR_PUBLIC_ORIGIN", "https://bumblebee.cnh.radarhq.io")
+    with TestClient(create_app(store), base_url="http://bumblebee.cnh.radarhq.io") as edge:
+        response = edge.post("/api/agenda", json={"action": "save", "session_id": "session-01"},
+                             headers={"origin": "https://bumblebee.cnh.radarhq.io"})
+        assert response.status_code == 200
+        assert "Secure" in response.headers["set-cookie"]
+        assert edge.post("/api/demo/reset", json={}, headers={"origin": "https://evil.example"}).status_code == 403
+
+
+def test_readiness_recovers_from_transient_initialization(monkeypatch, store):
+    import backend.main as main
+    store.mode = "elasticsearch"
+    calls = []
+
+    def initialize():
+        calls.append(True)
+        if len(calls) == 1:
+            raise RuntimeError("Temporary unavailable")
+
+    monkeypatch.setattr(store, "initialize", initialize)
+    monkeypatch.setattr(main, "ElasticStore", lambda: store)
+    monkeypatch.setenv("DETOUR_STORE", "elasticsearch")
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/readyz").status_code == 503
+        app.state.retry_after = 0
+        assert client.get("/readyz").status_code == 200
+        assert len(calls) == 2

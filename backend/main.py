@@ -1,6 +1,8 @@
 import logging
 import os
 import re
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,22 +24,29 @@ tracer = trace.get_tracer("detour")
 
 
 def create_app(store=None):
-    @asynccontextmanager
-    async def lifespan(app):
-        if store is None:
-            try:
+    initialization_lock = threading.Lock()
+
+    def initialize(app):
+        try:
+            if not getattr(app.state, "store", None):
                 mode = os.getenv("DETOUR_STORE", "elasticsearch")
                 if mode not in {"memory", "elasticsearch"}:
-                    raise ValueError("DETOUR_STORE must be elasticsearch or memory")
+                    raise ValueError("Unknown datastore mode")
                 app.state.store = MemoryStore() if mode == "memory" else ElasticStore()
-                if mode == "elasticsearch":
-                    # Synchronous SDK initialization runs once before accepting traffic.
-                    from starlette.concurrency import run_in_threadpool
-                    await run_in_threadpool(app.state.store.initialize)
-                app.state.ready = True
-            except Exception as exc:
-                app.state.ready = False
-                logger.error("Datastore initialization failed (%s); check secure configuration", type(exc).__name__)
+            if app.state.store.mode == "elasticsearch":
+                app.state.store.initialize()
+            app.state.ready = True
+        except Exception as exc:
+            app.state.ready = False
+            app.state.retry_after = time.monotonic() + 5
+            logger.error("Datastore initialization failed (%s); readiness will retry", type(exc).__name__)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.ready, app.state.retry_after = False, 0
+        if store is None:
+            from starlette.concurrency import run_in_threadpool
+            await run_in_threadpool(initialize, app)
         else:
             app.state.store, app.state.ready = store, True
         yield
@@ -50,7 +59,8 @@ def create_app(store=None):
     async def boundaries(request, call_next):
         if request.method in {"POST", "PUT", "DELETE", "PATCH"}:
             origin = request.headers.get("origin")
-            if origin and origin != str(request.base_url).rstrip("/"):
+            allowed = {str(request.base_url).rstrip("/"), os.getenv("DETOUR_PUBLIC_ORIGIN", "").rstrip("/")}
+            if origin and origin not in allowed:
                 return JSONResponse({"detail": "Cross-origin writes are not allowed"}, status_code=403)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "Use application/json"}, status_code=415)
@@ -65,6 +75,12 @@ def create_app(store=None):
         return response
 
     def database():
+        if not getattr(app.state, "ready", False) and time.monotonic() >= getattr(app.state, "retry_after", 0):
+            if initialization_lock.acquire(blocking=False):
+                try:
+                    initialize(app)
+                finally:
+                    initialization_lock.release()
         if not getattr(app.state, "ready", False):
             raise HTTPException(503, "Elasticsearch is not ready. Check the endpoint, API key and inference model configuration.")
         return app.state.store
@@ -73,7 +89,8 @@ def create_app(store=None):
         token = request.cookies.get("detour_attendee", "")
         if not re.fullmatch(r"[a-f0-9]{32}", token):
             token = uuid4().hex
-            response.set_cookie("detour_attendee", token, httponly=True, samesite="lax", secure=request.url.scheme == "https", max_age=86400)
+            secure = request.url.scheme == "https" or os.getenv("DETOUR_PUBLIC_ORIGIN", "").startswith("https://")
+            response.set_cookie("detour_attendee", token, httponly=True, samesite="lax", secure=secure, max_age=86400)
         return token
 
     @app.exception_handler(ConcurrentWrite)
@@ -199,7 +216,7 @@ def create_app(store=None):
     @app.post("/api/demo/disruptions")
     def disrupt(change: DisruptionChange, db=Depends(database)):
         with db.lock:
-            session = next((s for s in db.all_sessions() if s.id == change.session_id), None)
+            session, version = db.get_session(change.session_id)
             if session is None:
                 raise HTTPException(404, "Demo session not found")
             previous = session.model_dump(mode="json")
@@ -224,7 +241,7 @@ def create_app(store=None):
                 raise HTTPException(422, "Invalid time interval or location")
             event = {"id": uuid4().hex, "session_id": session.id, "event_type": change.event_type,
                      "timestamp": datetime.now(UTC).isoformat(), "previous": previous, "current": session.model_dump(mode="json")}
-            db.record_disruption(session, event)
+            db.record_disruption(session, event, version)
             return {"session": session, "disruption": event, "demo": True}
 
     @app.post("/api/replan")
