@@ -9,7 +9,6 @@
 node_modules/
 npm-debug.log*
 .DS_Store
- .env
 .env
 .env.*
 !.env.example
