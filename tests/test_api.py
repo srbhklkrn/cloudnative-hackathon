@@ -37,6 +37,20 @@ def test_conflict_and_anonymous_isolation(client, store):
         assert other.get("/api/agenda").json()["sessions"] == []
 
 
+def test_agenda_explains_conflicts_and_releases_them_on_remove(client):
+    payload = save(client, "session-01").json()
+    reason = payload["save_conflicts"]["session-02"]
+    assert "Inside Cilium's Datapath" in reason
+    assert "session-01" not in payload["save_conflicts"]
+    assert "session-06" not in payload["save_conflicts"]
+    assert save(client, "session-02").json()["detail"] == reason
+    save(client, "session-06")
+    assert len(client.get("/api/agenda").json()["sessions"]) == 2
+    payload = client.post("/api/agenda", json={"action": "remove", "session_id": "session-01"}).json()
+    assert "session-02" not in payload["save_conflicts"]
+    assert save(client, "session-02").status_code == 200
+
+
 def test_full_disruption_replan_accept_then_consecutive_cancel(client):
     save(client, "session-01")
     save(client, "session-11")
