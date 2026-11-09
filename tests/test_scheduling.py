@@ -99,6 +99,24 @@ def test_elastic_disruption_write_failure_does_not_update_session():
     store.client.bulk.assert_not_called()
 
 
+def test_elastic_reset_refreshes_pending_writes_before_deleting_demo_documents():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client, store._seed = Mock(), Mock()
+    visible, deleted = set(), []
+    store.client.indices.refresh.side_effect = lambda index: visible.update(index)
+
+    def delete_from_snapshot(index, **options):
+        if index not in visible:
+            raise ConflictError("Snapshot has an older document version", None, None)
+        assert options == {"query": {"term": {"demo": True}}, "refresh": True, "conflicts": "abort"}
+        deleted.append(index)
+
+    store.client.delete_by_query.side_effect = delete_from_snapshot
+    store.reset()
+    assert deleted == list(INDICES.values())
+    store._seed.assert_called_once_with()
+
+
 def test_elastic_disruption_rolls_back_event_when_session_conflicts():
     store = ElasticStore.__new__(ElasticStore)
     store.client = Mock()
