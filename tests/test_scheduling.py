@@ -113,3 +113,17 @@ def test_elastic_disruption_rolls_back_event_when_session_conflicts():
     store.client.options.assert_called_once_with(ignore_status=404)
     store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
         id=event["id"], refresh="wait_for")
+
+
+def test_elastic_disruption_rolls_back_event_on_session_failure_without_masking_it():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.update.side_effect = RuntimeError("session update failed")
+    store.client.options.return_value.delete.side_effect = RuntimeError("rollback failed")
+    event = {"id": "event-one"}
+
+    with pytest.raises(RuntimeError, match="session update failed"):
+        store.record_disruption(seed_sessions()[0], event, (1, 1))
+
+    store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
+        id=event["id"], refresh="wait_for")
