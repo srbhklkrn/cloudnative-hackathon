@@ -45,3 +45,28 @@ test('responsive layout, time-zone control and keyboard search work', async ({ p
   await page.getByRole('searchbox').press('Enter');
   await expect(page.getByText('A different path awaits.', { exact: true })).toBeVisible();
 });
+
+test('mutation during an in-flight poll still refreshes with the saved state', async ({ page }) => {
+  await page.goto('/');
+  const save = page.getByRole('button', { name: "Save Inside Cilium's Datapath", exact: true });
+  await expect(save).toBeVisible();
+  // Hold the next agenda poll so it is still in flight when the user saves.
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let held = false;
+  await page.route('**/api/agenda', async route => {
+    if (route.request().method() === 'GET' && !held) {
+      held = true;
+      const response = await route.fetch(); // pre-mutation snapshot
+      await gate;
+      await route.fulfill({ response });
+    } else {
+      await route.continue();
+    }
+  });
+  await expect.poll(() => held, { timeout: 15000 }).toBeTruthy();
+  await save.click();
+  release(); // stale poll completes after the mutation; a forced refresh must still follow
+  await expect(page.getByRole('button', { name: "Remove Inside Cilium's Datapath", exact: true })).toBeVisible();
+  await expect(page.getByText('Saving your change…', { exact: true })).toHaveCount(0);
+});
