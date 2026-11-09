@@ -11,4 +11,4 @@ resources:
 images:
   - name: app
     newName: ghcr.io/srbhklkrn/cloudnative-hackathon
-    newTag: 8910b3a
+    newTag: 2b30eaa
