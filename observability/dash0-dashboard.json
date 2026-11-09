@@ -1,0 +1,641 @@
+{
+  "kind": "Dashboard",
+  "metadata": {
+    "name": "detour-disruption-recovery"
+  },
+  "spec": {
+    "display": {
+      "name": "Detour \u2014 disruption recovery",
+      "description": "Request, replanning, recommendation, search and Elasticsearch health for the detour-api service."
+    },
+    "duration": "1h",
+    "panels": {
+      "requestRate": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Request rate",
+            "description": "HTTP server requests per second handled by detour-api."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list"
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "requests/sec"
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "pointRadius": 2,
+                "connectNulls": false
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(rate({otel_metric_name=\"detour.request.duration\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__rate_interval]))",
+                    "seriesNameFormat": "Requests"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "httpErrorRate": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "HTTP error rate (5xx)",
+            "description": "Share of HTTP requests answered with a 5xx status. Shows 0% while traffic exists and no 5xx occur."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list"
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "percent",
+                  "decimalPlaces": 2
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "pointRadius": 2,
+                "connectNulls": false
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "100 * (sum(rate({otel_metric_name=\"detour.request.duration\", otel_metric_type=\"histogram\", service_name=\"detour-api\", http_response_status_code=~\"5..\"}[$__rate_interval])) or vector(0)) / sum(rate({otel_metric_name=\"detour.request.duration\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__rate_interval]))",
+                    "seriesNameFormat": "5xx error rate"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "requestP95": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "p95 request duration",
+            "description": "95th percentile HTTP server request duration."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list"
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "seconds",
+                  "decimalPlaces": 3
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "pointRadius": 2,
+                "connectNulls": false
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"detour.request.duration\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__rate_interval])))",
+                    "seriesNameFormat": "p95"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "replanAttempts": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Replan attempts by outcome",
+            "description": "Agenda replanning attempts per interval, split by outcome."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list"
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "decimal",
+                  "decimalPlaces": 0
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "pointRadius": 2,
+                "connectNulls": false
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum by (outcome) (increase({otel_metric_name=\"detour.replan.attempts\", otel_metric_type=\"sum\", service_name=\"detour-api\"}[$__rate_interval]))",
+                    "seriesNameFormat": "{{outcome}}"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "replanOutcomes": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Replan outcomes",
+            "description": "Replanning attempts in the selected time range, by outcome."
+          },
+          "plugin": {
+            "kind": "PieChart",
+            "spec": {
+              "calculation": "last-number",
+              "radius": 50,
+              "legend": {
+                "position": "right",
+                "mode": "list"
+              },
+              "format": {
+                "unit": "decimal",
+                "decimalPlaces": 0
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum by (outcome) (increase({otel_metric_name=\"detour.replan.attempts\", otel_metric_type=\"sum\", service_name=\"detour-api\"}[$__range]))",
+                    "seriesNameFormat": "{{outcome}}"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "replanP95": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "p95 replan duration",
+            "description": "95th percentile duration of agenda replanning."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list"
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "seconds",
+                  "decimalPlaces": 3
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "pointRadius": 2,
+                "connectNulls": false
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "histogram_quantile(0.95, sum(rate({otel_metric_name=\"detour.replan.duration\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__rate_interval])))",
+                    "seriesNameFormat": "p95 replan"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "disruptions": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Disruptions recorded",
+            "description": "Disruptions persisted in the selected time range."
+          },
+          "plugin": {
+            "kind": "StatChart",
+            "spec": {
+              "calculation": "last-number",
+              "format": {
+                "unit": "decimal",
+                "decimalPlaces": 0
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(increase({otel_metric_name=\"detour.disruptions\", otel_metric_type=\"sum\", service_name=\"detour-api\"}[$__range]))",
+                    "seriesNameFormat": "Disruptions"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "recommendationsTotal": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Recommendations returned",
+            "description": "Compatible replacement sessions returned in the selected time range."
+          },
+          "plugin": {
+            "kind": "StatChart",
+            "spec": {
+              "calculation": "last-number",
+              "format": {
+                "unit": "decimal",
+                "decimalPlaces": 0
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(histogram_sum(increase({otel_metric_name=\"detour.recommendations.count\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__range])))",
+                    "seriesNameFormat": "Recommendations"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "recommendationsAvg": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Avg recommendations per request",
+            "description": "Average number of compatible replacements returned per recommendation request in the selected time range."
+          },
+          "plugin": {
+            "kind": "StatChart",
+            "spec": {
+              "calculation": "last-number",
+              "format": {
+                "unit": "decimal",
+                "decimalPlaces": 1
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(histogram_sum(rate({otel_metric_name=\"detour.recommendations.count\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__range]))) / sum(histogram_count(rate({otel_metric_name=\"detour.recommendations.count\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__range])))",
+                    "seriesNameFormat": "Avg per request"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "searchP95": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "p95 search duration by mode",
+            "description": "95th percentile session search duration, split by search mode (hybrid, keyword)."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list"
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "seconds",
+                  "decimalPlaces": 3
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "pointRadius": 2,
+                "connectNulls": false
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "histogram_quantile(0.95, sum by (search_mode) (rate({otel_metric_name=\"detour.search.duration\", otel_metric_type=\"histogram\", service_name=\"detour-api\"}[$__rate_interval])))",
+                    "seriesNameFormat": "{{search_mode}} p95"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "esErrors": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Elasticsearch request failures by type",
+            "description": "Datastore requests returned as HTTP 503; expected not-found lookups are excluded."
+          },
+          "plugin": {
+            "kind": "TimeSeriesChart",
+            "spec": {
+              "legend": {
+                "position": "bottom",
+                "mode": "list"
+              },
+              "yAxis": {
+                "format": {
+                  "unit": "decimal",
+                  "decimalPlaces": 0
+                }
+              },
+              "visual": {
+                "display": "line",
+                "lineWidth": 1.5,
+                "pointRadius": 2,
+                "connectNulls": false
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum by (error_type) (increase({otel_metric_name=\"detour.elasticsearch.errors\", otel_metric_type=\"sum\", service_name=\"detour-api\"}[$__rate_interval])) or vector(0)",
+                    "seriesNameFormat": "{{error_type}}"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "esErrorsTotal": {
+        "kind": "Panel",
+        "spec": {
+          "display": {
+            "name": "Elasticsearch errors",
+            "description": "Requests failed due to Elasticsearch; expected not-found lookups excluded."
+          },
+          "plugin": {
+            "kind": "StatChart",
+            "spec": {
+              "calculation": "last-number",
+              "format": {
+                "unit": "decimal",
+                "decimalPlaces": 0
+              }
+            }
+          },
+          "queries": [
+            {
+              "kind": "TimeSeriesQuery",
+              "spec": {
+                "plugin": {
+                  "kind": "PrometheusTimeSeriesQuery",
+                  "spec": {
+                    "query": "sum(increase({otel_metric_name=\"detour.elasticsearch.errors\", otel_metric_type=\"sum\", service_name=\"detour-api\"}[$__range])) or vector(0)",
+                    "seriesNameFormat": "Failures"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "layouts": [
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Traffic and HTTP errors",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 8,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/requestRate"
+              }
+            },
+            {
+              "x": 8,
+              "y": 0,
+              "width": 8,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/httpErrorRate"
+              }
+            },
+            {
+              "x": 16,
+              "y": 0,
+              "width": 8,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/requestP95"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Disruption recovery",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 8,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/disruptions"
+              }
+            },
+            {
+              "x": 8,
+              "y": 0,
+              "width": 8,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/recommendationsTotal"
+              }
+            },
+            {
+              "x": 16,
+              "y": 0,
+              "width": 8,
+              "height": 4,
+              "content": {
+                "$ref": "#/spec/panels/recommendationsAvg"
+              }
+            },
+            {
+              "x": 0,
+              "y": 4,
+              "width": 12,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/replanAttempts"
+              }
+            },
+            {
+              "x": 12,
+              "y": 4,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/replanOutcomes"
+              }
+            },
+            {
+              "x": 18,
+              "y": 4,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/replanP95"
+              }
+            }
+          ]
+        }
+      },
+      {
+        "kind": "Grid",
+        "spec": {
+          "display": {
+            "title": "Search and Elasticsearch",
+            "collapse": {
+              "open": true
+            }
+          },
+          "items": [
+            {
+              "x": 0,
+              "y": 0,
+              "width": 9,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/searchP95"
+              }
+            },
+            {
+              "x": 9,
+              "y": 0,
+              "width": 9,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/esErrors"
+              }
+            },
+            {
+              "x": 18,
+              "y": 0,
+              "width": 6,
+              "height": 6,
+              "content": {
+                "$ref": "#/spec/panels/esErrorsTotal"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

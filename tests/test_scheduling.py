@@ -2,7 +2,7 @@ from datetime import timedelta
 from unittest.mock import Mock
 
 import pytest
-from elasticsearch import ConflictError
+from elasticsearch import ApiError, ConflictError
 from pydantic import ValidationError
 
 from backend.data import seed_sessions
@@ -115,13 +115,14 @@ def test_elastic_disruption_rolls_back_event_when_session_conflicts():
         id=event["id"], refresh="wait_for")
 
 
-def test_elastic_disruption_item_conflict_raises_concurrent_write():
+@pytest.mark.parametrize("status,error", [(409, ConcurrentWrite), (404, ApiError)])
+def test_elastic_disruption_item_error_rolls_back_event(status, error):
     store = ElasticStore.__new__(ElasticStore)
     store.client = Mock()
     store.client.bulk.return_value = Mock(meta=Mock(),
-        __getitem__=lambda self, key: {"items": [{"update": {"status": 409}}]}[key])
+        __getitem__=lambda self, key: {"items": [{"update": {"status": status}}]}[key])
 
-    with pytest.raises(ConcurrentWrite):
+    with pytest.raises(error):
         store.record_disruption(seed_sessions()[0], {"id": "event-one"}, (1, 1))
 
     store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],

@@ -1,0 +1,15 @@
+{
+  "diagram_type": "architecture",
+  "quality": "showcase",
+  "status": "pass",
+  "specification_sha256": "6c71c1a33fda5ed177f5b0b7c44d44adf1e3c0937cd6563cf6d3c28ea29c3dba",
+  "artifact_sha256": "e74c4b12efedcb6b438d5e224947b0c040dc45599661bc0ce357c2742981b155",
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "visual_review": "not-requested"
+}

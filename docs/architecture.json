@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Detour: a change of plans, a better next experience",
+    "output": ".archify/architecture-detour-20261109-124100/detour.html",
+    "quality_profile": "showcase",
+    "locale": "en",
+    "repository": {"url": "https://github.com/srbhklkrn/cloudnative-hackathon.git", "revision": "8a449c15ef6c1573c94b2661f0b55cc1a668a389", "provider": "github"}
+  },
+  "components": [
+    {"id":"attendees","type":"frontend","label":"Attendee + organizer","sublabel":"React browser interface","pos":[40,270],"size":[200,78],"sources":[{"path":"frontend/src/App.tsx","line":19,"end_line":28},{"path":"frontend/src/App.tsx","line":60,"end_line":96}]},
+    {"id":"app","type":"backend","label":"Detour application","sublabel":"FastAPI + built Vite assets","tag":"one non-root container :8080","pos":[450,270],"size":[240,90],"sources":[{"path":"Dockerfile","line":14,"end_line":24},{"path":"backend/main.py","line":143,"end_line":221},{"path":"backend/main.py","line":261,"end_line":291}]},
+    {"id":"elastic","type":"database","label":"Elasticsearch Serverless","sublabel":"Sessions, agendas, disruptions","tag":"hybrid search + persistence","pos":[900,270],"size":[240,90],"sources":[{"path":"backend/store.py","line":15,"end_line":16},{"path":"backend/store.py","line":152,"end_line":191}]},
+    {"id":"jina","type":"cloud","label":"Jina on Elastic EIS","sublabel":"jina-embeddings-v5-text-small","pos":[900,510],"size":[240,78],"sources":[{"path":"backend/store.py","line":84,"end_line":102},{"path":"backend/store.py","line":116,"end_line":122}]},
+    {"id":"dash","type":"cloud","label":"Dash0","sublabel":"OTLP/HTTP traces, metrics, logs","pos":[450,510],"size":[240,78],"sources":[{"path":"backend/telemetry.py","line":52,"end_line":71},{"path":"backend/telemetry.py","line":80,"end_line":103}]},
+    {"id":"radar","type":"cloud","label":"Radar Cloud + MCP","sublabel":"Operator inspection + AI SRE","pos":[40,510],"size":[220,78],"sources":[{"path":"AGENTS.md","line":1,"end_line":7},{"path":"STORY.md","line":3,"end_line":21}]},
+    {"id":"gitops","type":"cloud","label":"Argo CD","sublabel":"Reconcile deploy/ from main","pos":[450,50],"size":[240,78],"sources":[{"path":"argocd/application.yaml","line":5,"end_line":21},{"path":".github/workflows/deploy.yaml","line":35,"end_line":71}]}
+  ],
+  "boundaries": [{"kind":"region","label":"Kubernetes namespace: team-bumblebee","wraps":["app"],"pad":27}],
+  "connections": [
+    {"id":"browser-api","from":"attendees","to":"app","label":"same-origin JSON API","variant":"emphasis"},
+    {"id":"app-data","from":"app","to":"elastic","label":"retrieval + state writes","variant":"emphasis"},
+    {"id":"elastic-inference","from":"elastic","to":"jina","label":"generate embeddings"},
+    {"id":"app-observability","from":"app","to":"dash","label":"OTLP export when configured","variant":"dashed"},
+    {"id":"operator-inspection","from":"radar","to":"app","label":"inspect + investigate","variant":"dashed"},
+    {"id":"reconcile","from":"gitops","to":"app","label":"GitOps rollout"}
+  ],
+  "cards": [
+    {"dot":"emerald","title":"Disruption recovery","items":["Organizer changes persist in Elasticsearch.","Replanning excludes unavailable or conflicting sessions.","Accepting revalidates the replacement and updates the agenda."]},
+    {"dot":"cyan","title":"Engineering workflow","items":["Gitar reviews feature PRs against .gitar/review/detour.md.","GitHub Actions tests the app and publishes its GHCR image.","The build updates deploy/kustomization.yaml; Argo CD reconciles it."]},
+    {"dot":"amber","title":"Honest demo boundaries","items":["All speakers, sessions and venue metadata are fictional.","Accessibility requirements require verified demo metadata.","Memory mode is explicit, temporary and keyword-only.","Secrets stay outside Git; live integration evidence is in STORY.md."]}
+  ]
+}

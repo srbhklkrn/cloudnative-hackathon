@@ -35,10 +35,95 @@ availability. Cross-process session and agenda updates also use optimistic concu
 received a Gitar review identifying HTTPS proxy-origin handling, initialization
 recovery and concurrent organizer updates. Commit `391d557` fixes these and adds
 regressions, taking the backend suite from 20 to 23 passing tests.
-Auto-apply was requested through Gitar's PR interface. Final review and CI status
-must be checked before merge; a passing Gitar check alone does not mean no findings.
+Gitar auto-applied event-first persistence with compensating cleanup. The API PR
+merged after checks passed.
 
-## Remaining evidence
+The [UI PR #2](https://github.com/srbhklkrn/cloudnative-hackathon/pull/2) received
+two real polling-race findings. Gitar's commits `0944028` and `3330e14` queue and
+await a fresh post-mutation snapshot. A browser regression deliberately holds an
+in-flight poll while saving a session. Gitar also fixed small-screen text sizing in
+`204e00e`; the final CSS preserves readable card labels on mobile.
 
-Public rollout, Dash0 ingestion/query verification, dashboards and hosted AI
-investigations will be recorded here only after successful execution.
+The first UI CI run genuinely failed in `npm ci`. Gitar investigated the failure
+and initially attributed it to npm tooling without proving the root cause. Inspection
+showed the local lockfile contained private registry URLs. Regenerating against the
+public npm registry fixed the builds (`f72cbbf`). Do not present Gitar's initial
+hypothesis as the verified diagnosis. Subsequent CI passed backend, frontend and
+Chromium jobs, including [run 42688406180](https://github.com/srbhklkrn/cloudnative-hackathon/actions/runs/42688406180).
+
+The [observability PR #3](https://github.com/srbhklkrn/cloudnative-hackathon/pull/3)
+received three additional findings: incomplete event rollback, an ignored explicit
+MCP endpoint, and missing coverage for item-level Bulk API conflicts. Gitar fixed
+them in `6386b05`/`93f70a6` and `fb1f816`. Local tests also cover non-conflict item
+errors without masking the original failure.
+
+Project review context lives in `.gitar/review/detour.md`; the explicit check rule
+is `.gitar/rules/scheduling-contract.md`. A review that says "No rules evaluated"
+does not establish that the check rule ran; rule execution is tracked separately.
+
+## Dash0: verified ingestion and a real Agent0 investigation
+
+The initial ingestion token could not query MCP (403). After the participant enabled
+query permissions, the official MCP Python client successfully read dataset
+`default`, service `detour-api`, traces, logs and metrics. The service catalog
+initially reported 136 requests and zero HTTP errors. These were local integration
+requests against real Elasticsearch, not traffic from a deployed version.
+
+Agent0 investigation `897ec8fd-1de8-4755-bc81-381a0666b691` inspected genuine
+telemetry. Its finding: two sequential writes using `refresh=wait_for` dominated
+organizer latency. Reading Elasticsearch settings confirmed a **5s default refresh
+interval**. Agent0 correctly distinguished that wait from an unproven inference
+bottleneck, and identified duplicate HTTP instrumentation.
+
+| Observed request | Total trace | Event write | Session write |
+| --- | ---: | ---: | ---: |
+| Before | 8.567s | 3.755s | 4.771s |
+| After | 4.865s | 0.183s | 4.640s |
+
+[Before trace](https://app.dash0.com/goto/traces/explorer?org=04f0aadf-6701-43ec-92a9-61f3ef36109d&dataset=default&from=2026-11-09T19%3A30%3A00.000Z&to=2026-11-09T19%3A45%3A00.000Z&trace_id=97e878c747b32d71becac65f38ff1d9e)
+and [after trace](https://app.dash0.com/goto/traces/explorer?org=04f0aadf-6701-43ec-92a9-61f3ef36109d&dataset=default&from=2026-11-09T19%3A55%3A00.000Z&to=2026-11-09T20%3A10%3A00.000Z&trace_id=a6bdeb97739b885ba8959a5f3b582778).
+These are individual observations, not a controlled performance benchmark.
+
+Actions taken: retain one session refresh barrier so search sees the change before
+success; stop waiting for agenda refresh because agendas use real-time GET; allow
+event history to become searchable on its next refresh; use Bulk partial updates to
+reuse unchanged semantic embeddings per [Elastic's documentation](https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/semantic-text-ingestions);
+disable FastAPI's overlapping native telemetry. The after trace has one Detour HTTP
+root, one event-write span and one session-write span.
+
+Agent0's dashboard task (`81f775aa-a8d9-458b-a487-3a960e8e4986`) returned a validated
+Perses definition but could not create dashboards in that context. The definition
+was adapted to Detour's custom request/error metrics and created using the official
+REST API. Both API GET and MCP `listDashboards` confirmed it exists with 12 panels.
+
+- Name: `detour-disruption-recovery`
+- API origin: `api-8bcc23c9-5fac-4b46-8ff7-abbea0a0b045`
+- MCP dashboard ID: `7f8f4e66-28f2-4a83-934f-8a63e12b3d31`
+- [Dashboard list](https://app.dash0.com/dashboards?org=04f0aadf-6701-43ec-92a9-61f3ef36109d)
+- Source: `observability/dash0-dashboard.json`
+
+PromQL read-back of `detour.request.duration` returned live service data (0.2583
+requests/s at 19:59:25 UTC). MCP log reads returned `API request completed` entries.
+Datastore failure panels count failed API requests, excluding expected not-found
+lookups. Native framework metrics from earlier local runs remain in historical data;
+the checked-in dashboard uses the custom metrics.
+
+## Validation and presentation
+
+31 backend tests pass locally. All four Chromium tests pass against real Elasticsearch:
+the attendee/organizer recovery flow, mobile/keyboard/time-zone behavior, deliberate
+polling overlap, and automated WCAG AA checks for both views. The same browser tests
+run in CI using explicitly labeled memory mode. The real Elasticsearch check is
+separate and uses protected local credentials.
+
+`docs/screenshots/` contains actual local-browser screenshots. `docs/architecture.html`
+is a validated, standalone interactive diagram; its pinned source revision and
+validation receipt are checked in. These are implementation evidence, not screenshots
+of a public rollout.
+
+## Deployment status
+
+Public rollout is pending the participant's `detour-credentials` Secret in
+`team-bumblebee` (or a team-scoped kubeconfig to import it through a secure terminal).
+Radar still shows the original 2/2 Node starter replicas. No Detour deployment,
+post-rollout Checks, Timeline, or deployed-workload AI investigation is claimed yet.
