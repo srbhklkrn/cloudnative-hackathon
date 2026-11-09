@@ -17,10 +17,12 @@ from backend.telemetry import export_headers
 
 
 async def main():
-    host = urlparse(os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]).hostname or ""
-    if not host.startswith("ingress.") or not host.endswith(".dash0.com"):
-        raise ValueError("Set DASH0_MCP_URL to the endpoint from Dash0 Settings → Endpoints")
-    url = os.getenv("DASH0_MCP_URL", f"https://api.{host.removeprefix('ingress.')}/mcp")
+    url = os.getenv("DASH0_MCP_URL")
+    if not url:
+        host = urlparse(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")).hostname or ""
+        if not host.startswith("ingress.") or not host.endswith(".dash0.com"):
+            raise ValueError("Set DASH0_MCP_URL to the endpoint from Dash0 Settings → Endpoints")
+        url = f"https://api.{host.removeprefix('ingress.')}/mcp"
     headers = {"Authorization": "Bearer " + os.environ["DASH0_AUTH_TOKEN"]} if os.getenv("DASH0_AUTH_TOKEN") else export_headers()
     async with httpx.AsyncClient(headers=headers, timeout=90) as client:
         async with streamable_http_client(url, http_client=client) as (read, write, _):
