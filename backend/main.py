@@ -59,7 +59,9 @@ def create_app(store=None):
             app.state.store.close()
         telemetry.flush_telemetry()
 
-    app = FastAPI(title="Detour", version="0.1.0", lifespan=lifespan)
+    # Our route-only middleware avoids duplicate framework spans and sensitive attributes.
+    app = FastAPI(title="Detour", version="0.1.0", lifespan=lifespan,
+                  telemetry={"tracing": False, "metrics": False, "logs": False})
 
     @app.middleware("http")
     async def boundaries(request, call_next):

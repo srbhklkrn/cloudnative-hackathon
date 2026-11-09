@@ -187,17 +187,19 @@ class ElasticStore:
 
     def save_agenda(self, token: str, agenda: Agenda, version):
         options = {"op_type": "create"} if version is None else {"if_seq_no": version[0], "if_primary_term": version[1]}
+        # Agendas use real-time GET by ID, so waiting for search refresh adds no consistency.
         try:
             self.client.index(index=INDICES["agendas"], id=token,
-                document={**agenda.model_dump(mode="json"), "demo": True}, refresh="wait_for", **options)
+                document={**agenda.model_dump(mode="json"), "demo": True}, **options)
         except ConflictError as exc:
             raise ConcurrentWrite from exc
 
     def record_disruption(self, session: Session, event: dict, version):
         # Compare-and-swap prevents lost organizer changes, even during overlapping rollouts.
+        # Event history is eventually visible; session search visibility is awaited below.
         with tracer.start_as_current_span("detour.elasticsearch.record_disruption", record_exception=False, set_status_on_exception=False):
             self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True},
-                op_type="create", refresh="wait_for")
+                op_type="create")
         try:
             with tracer.start_as_current_span("detour.elasticsearch.update_session", record_exception=False, set_status_on_exception=False):
                 # Bulk partial updates reuse semantic embeddings when semantic_text is omitted.

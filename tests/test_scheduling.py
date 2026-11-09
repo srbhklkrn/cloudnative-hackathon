@@ -109,7 +109,7 @@ def test_elastic_disruption_rolls_back_event_when_session_conflicts():
         store.record_disruption(seed_sessions()[0], event, (1, 1))
 
     store.client.index.assert_called_once_with(index=INDICES["disruptions"], id=event["id"],
-        document={**event, "demo": True}, op_type="create", refresh="wait_for")
+        document={**event, "demo": True}, op_type="create")
     store.client.options.assert_called_once_with(ignore_status=404)
     store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
         id=event["id"], refresh="wait_for")
