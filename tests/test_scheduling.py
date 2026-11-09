@@ -115,6 +115,19 @@ def test_elastic_disruption_rolls_back_event_when_session_conflicts():
         id=event["id"], refresh="wait_for")
 
 
+def test_elastic_disruption_item_conflict_raises_concurrent_write():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.bulk.return_value = Mock(meta=Mock(),
+        __getitem__=lambda self, key: {"items": [{"update": {"status": 409}}]}[key])
+
+    with pytest.raises(ConcurrentWrite):
+        store.record_disruption(seed_sessions()[0], {"id": "event-one"}, (1, 1))
+
+    store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
+        id="event-one", refresh="wait_for")
+
+
 def test_elastic_disruption_rolls_back_event_on_session_failure_without_masking_it():
     store = ElasticStore.__new__(ElasticStore)
     store.client = Mock()
