@@ -1,12 +1,14 @@
 from datetime import timedelta
+from unittest.mock import Mock
 
 import pytest
+from elasticsearch import ConflictError
 from pydantic import ValidationError
 
 from backend.data import seed_sessions
 from backend.models import Agenda, Preferences, Session
 from backend.scheduling import affected, conflict, rank_replacements, unavailable
-from backend.store import ConcurrentWrite
+from backend.store import ConcurrentWrite, ElasticStore, INDICES
 
 
 def test_seed_is_utc_and_fictional():
@@ -84,3 +86,30 @@ def test_concurrent_organizer_change_is_rejected(store):
         store.record_disruption(stale, {"id": "event-two"}, stale_version)
     assert store.get_session("session-01")[0].status == "canceled"
     assert len(store.events) == 1
+
+
+def test_elastic_disruption_write_failure_does_not_update_session():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.index.side_effect = RuntimeError("event write failed")
+
+    with pytest.raises(RuntimeError, match="event write failed"):
+        store.record_disruption(seed_sessions()[0], {"id": "event-one"}, (1, 1))
+
+    store.client.update.assert_not_called()
+
+
+def test_elastic_disruption_rolls_back_event_when_session_conflicts():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.update.side_effect = ConflictError("conflict", None, None)
+    event = {"id": "event-one"}
+
+    with pytest.raises(ConcurrentWrite):
+        store.record_disruption(seed_sessions()[0], event, (1, 1))
+
+    store.client.index.assert_called_once_with(index=INDICES["disruptions"], id=event["id"],
+        document={**event, "demo": True}, op_type="create", refresh="wait_for")
+    store.client.options.assert_called_once_with(ignore_status=404)
+    store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
+        id=event["id"], refresh="wait_for")

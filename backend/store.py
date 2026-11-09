@@ -192,12 +192,14 @@ class ElasticStore:
 
     def record_disruption(self, session: Session, event: dict, version):
         # Compare-and-swap prevents lost organizer changes, even during overlapping rollouts.
+        self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True},
+            op_type="create", refresh="wait_for")
         try:
             self.client.update(index=INDICES["sessions"], id=session.id, doc=session.model_dump(mode="json"),
                 if_seq_no=version[0], if_primary_term=version[1], refresh="wait_for")
         except ConflictError as exc:
+            self.client.options(ignore_status=404).delete(index=INDICES["disruptions"], id=event["id"], refresh="wait_for")
             raise ConcurrentWrite from exc
-        self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True}, refresh="wait_for")
 
     def disruptions(self):
         result = self.client.search(index=INDICES["disruptions"], query={"bool": {"filter": [{"term": {"demo": True}}],
