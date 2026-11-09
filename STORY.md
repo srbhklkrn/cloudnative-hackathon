@@ -123,7 +123,27 @@ of a public rollout.
 
 ## Deployment status
 
+All three feature PRs are merged. The final source merge is `2b30eaa`.
+[Build 42689393250](https://github.com/srbhklkrn/cloudnative-hackathon/actions/runs/42689393250)
+succeeded and bot commit `2191e07` updated Kustomize to
+`ghcr.io/srbhklkrn/cloudnative-hackathon:2b30eaa`. An anonymous registry request
+for that exact tag returned 200 with manifest digest
+`sha256:56a1583190bafe8b9ac2e3f1249d6332ad9ff309e581f42aef58831b86c2d632`.
+The final local Docker image passed all four Chromium tests against real Elasticsearch.
+
+Radar accepted a server-side dry run of `argocd/application.yaml`; no Application
+was created. Its hosted AI investigation
+[chat_I6wiDXKDB6aOqmg7](https://app.radarhq.io/c/7rQNMDbB570/investigations/chat_I6wiDXKDB6aOqmg7?org=org_NCJbssDGEBsU)
+finished with a healthy verdict on the **original starter**: 2/2 ready, no restarts
+or live issues, and a medium token-automount posture finding. Direct resource and
+Checks reads independently confirmed the starter image and the same three medium
+findings listed above. This establishes a baseline, not Detour rollout success.
+
+Timeline `get_changes` returned no observed Deployment changes in the requested
+two-hour window and explicitly limited coverage to observations after 18:54:26 UTC.
+That limited history does not prove no earlier changes occurred.
+
 Public rollout is pending the participant's `detour-credentials` Secret in
 `team-bumblebee` (or a team-scoped kubeconfig to import it through a secure terminal).
 Radar still shows the original 2/2 Node starter replicas. No Detour deployment,
-post-rollout Checks, Timeline, or deployed-workload AI investigation is claimed yet.
+post-rollout Checks, Timeline, or deployed-Detour AI investigation is claimed yet.
