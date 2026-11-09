@@ -23,6 +23,13 @@ def conflict(a: Session, b: Session, preferences: Preferences) -> bool:
     return earlier.end + timedelta(minutes=travel_minutes(a, b, preferences)) > later.start
 
 
+def conflict_reason(session: Session, saved: list[Session], preferences: Preferences) -> str | None:
+    for other in saved:
+        if other.id != session.id and conflict(session, other, preferences):
+            return f'Overlaps “{other.title}” or leaves insufficient transfer time'
+    return None
+
+
 def unavailable(session: Session, preferences: Preferences) -> str | None:
     if session.status == "canceled":
         return "Session canceled by the demo organizer"

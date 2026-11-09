@@ -16,7 +16,7 @@ from opentelemetry import trace
 from pydantic import ValidationError
 
 from .models import AgendaChange, CONFERENCE_TZ, DisruptionChange, Preferences, Session, TOPICS
-from .scheduling import affected, conflict, rank_replacements, unavailable
+from .scheduling import affected, conflict_reason, rank_replacements, unavailable
 from .store import ConcurrentWrite, ElasticStore, MemoryStore
 from . import telemetry
 
@@ -171,7 +171,10 @@ def create_app(store=None):
 
     def agenda_payload(agenda, db):
         sessions = {s.id: s for s in db.all_sessions()}
-        return {"agenda": agenda, "sessions": [sessions[x] for x in agenda.session_ids if x in sessions],
+        saved = [sessions[x] for x in agenda.session_ids if x in sessions]
+        save_conflicts = {s.id: reason for s in sessions.values() if s.id not in agenda.session_ids
+                          and (reason := conflict_reason(s, saved, agenda.preferences))}
+        return {"agenda": agenda, "sessions": saved, "save_conflicts": save_conflicts,
                 "affected": affected(agenda, sessions), "demo": True}
 
     @app.get("/api/agenda")
@@ -209,8 +212,9 @@ def create_app(store=None):
                         raise HTTPException(409, "Choose a different session that is not already saved")
                 reason = unavailable(session, agenda.preferences)
                 retained = [sessions[x] for x in agenda.session_ids if x != change.session_id and x in sessions]
-                if reason or any(conflict(session, other, agenda.preferences) for other in retained):
-                    raise HTTPException(409, reason or "Session overlaps your agenda or leaves insufficient transfer time")
+                reason = reason or conflict_reason(session, retained, agenda.preferences)
+                if reason:
+                    raise HTTPException(409, reason)
                 if change.action == "accept":
                     original = sessions[change.session_id]
                     if session.start < original.start or session.start.astimezone(CONFERENCE_TZ).date() != original.start.astimezone(CONFERENCE_TZ).date():

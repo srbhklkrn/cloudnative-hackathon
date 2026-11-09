@@ -90,6 +90,13 @@ The UI allows keyword-only and meaning-only retrieval for a direct comparison.
 - Anonymous agendas use random HttpOnly SameSite cookies, not real accounts or names.
   Agenda and organizer session writes use optimistic concurrency.
 
+Session cards explain time/transfer conflicts with the saved agenda before saving;
+the API revalidates them on every write. Topic interests prioritize replacement
+recommendations; the program's topic, level, time and accessibility controls filter
+search results. “Clear all filters” also clears selected accessibility needs, as
+stated beside the button. Preference changes appear immediately and roll back if
+the save fails. Background polling preserves failed-action feedback.
+
 The deployment uses one Uvicorn worker and one replica to serialize demo writes.
 This is a deliberate hackathon availability limit; add coordinated transactions
 before scaling mutation traffic. Elasticsearch does not offer a transaction across
@@ -107,7 +114,7 @@ interval later (five seconds in the tested Elasticsearch project).
 | GET | `/api/meta` | Runtime store, inference ID, version and configuration status |
 | GET | `/api/sessions` | Fictional program and persisted disruptions |
 | GET | `/api/search` | `q`, `mode=hybrid\|keyword\|semantic`, topic, level, aware `after`/`before`, repeated accessibility filters |
-| GET | `/api/agenda` | Cookie-scoped saved sessions and affected sessions |
+| GET | `/api/agenda` | Cookie-scoped saved sessions, affected sessions, and `save_conflicts` keyed by session ID |
 | POST | `/api/agenda` | `save`, `remove`, `preferences`, `accept`, or `reject` action |
 | POST | `/api/demo/disruptions` | `room_full`, `cancel`, `update`, or `reopen` for a demo session |
 | POST | `/api/replan` | Current disruption, up to three alternatives, or an explicit no-alternative result |

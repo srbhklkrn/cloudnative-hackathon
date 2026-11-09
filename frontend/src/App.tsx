@@ -38,12 +38,16 @@ export default function App() {
   const [results, setResults] = useState<Session[]>([]);
   const [query, setQuery] = useState('');
   const [submitted, setSubmitted] = useState('');
+  const [searchAttempt, setSearchAttempt] = useState(0);
   const [topic, setTopic] = useState('');
   const [level, setLevel] = useState('');
   const [after, setAfter] = useState('');
   const [mode, setMode] = useState('hybrid');
   const [zone, setZone] = useState('America/Denver');
-  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [searchError, setSearchError] = useState('');
+  const [refreshError, setRefreshError] = useState('');
+  const [pendingPreferences, setPendingPreferences] = useState<Preferences | null>(null);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState('');
   const [searching, setSearching] = useState(true);
@@ -52,7 +56,8 @@ export default function App() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const inflight = useRef<Promise<void> | null>(null);
   const planKey = useRef('');
-  const preferences = agenda?.agenda.preferences || emptyPreferences;
+  const preferences = pendingPreferences || agenda?.agenda.preferences || emptyPreferences;
+  const error = actionError || searchError || refreshError;
   const savedIds = agenda?.agenda.session_ids || [];
   const stamp = allSessions.map(s => `${s.id}:${s.revision}`).join(',');
   const accessKey = preferences.accessibility.join(',');
@@ -76,8 +81,8 @@ export default function App() {
           const nextPlan = await api<Plan>('/api/replan', {});
           setPlan(nextPlan); planKey.current = key;
         }
-        setError('');
-      } catch (e) { setError((e as Error).message); }
+        setRefreshError('');
+      } catch (e) { setRefreshError((e as Error).message); }
       finally { setInitializing(false); }
     })();
     const current = request.finally(() => { inflight.current = null; });
@@ -97,32 +102,42 @@ export default function App() {
     const params = new URLSearchParams({ q: submitted, mode, topic, level });
     if (after) params.set('after', `2026-11-09T${after}:00-07:00`);
     preferences.accessibility.forEach(x => params.append('accessibility', x));
-    setSearching(true);
+    setSearching(true); setSearchError('');
     api<{ results: { session: Session }[] }>(`/api/search?${params}`, undefined, controller.signal)
       .then(data => { setResults(data.results.map(x => x.session)); setSearching(false); })
-      .catch(e => { if (e.name !== 'AbortError') { setError(e.message); setSearching(false); } });
+      .catch(e => { if (e.name !== 'AbortError') { setSearchError(e.message); setSearching(false); } });
     return () => controller.abort();
-  }, [submitted, mode, topic, level, after, stamp, accessKey, meta?.ready]);
+  }, [submitted, searchAttempt, mode, topic, level, after, stamp, accessKey, meta?.ready]);
 
   async function mutate(path: string, body: unknown, message: string, key: string) {
-    setBusy(key); setError(''); setNotice('Saving your change…');
+    setBusy(key); setActionError(''); setNotice('Saving your change…');
     try {
-      await api(path, body);
-      setNotice(message);
+      const updated = await api<AgendaResponse>(path, body);
+      if (path === '/api/agenda') setAgenda(updated);
       await refresh(true);
-    } catch (e) { setError((e as Error).message); }
+      setNotice(message);
+    } catch (e) { setActionError((e as Error).message); setNotice(''); }
     finally { setBusy(''); }
+  }
+  function updatePreferences(next: Preferences) {
+    setPendingPreferences(next);
+    void mutate('/api/agenda', { action: 'preferences', preferences: next }, 'Preferences updated. Your agenda has been checked again.', 'preferences')
+      .finally(() => setPendingPreferences(null));
   }
   function togglePreference(kind: keyof Preferences, value: string) {
     const values = preferences[kind];
     const next = { ...preferences, [kind]: values.includes(value) ? values.filter(x => x !== value) : [...values, value] };
-    void mutate('/api/agenda', { action: 'preferences', preferences: next }, 'Preferences updated. Your agenda has been checked again.', 'preferences');
+    updatePreferences(next);
   }
   function save(s: Session) {
     const isSaved = savedIds.includes(s.id);
     void mutate('/api/agenda', { action: isSaved ? 'remove' : 'save', session_id: s.id }, isSaved ? 'Session removed from your agenda.' : 'Added to your agenda.', s.id);
   }
-  function performSearch(value: string) { setQuery(value); setSubmitted(value); setView('discover'); }
+  function performSearch(value: string) { setQuery(value); setSubmitted(value); setSearchAttempt(n => n + 1); setView('discover'); }
+  function clearFilters() {
+    performSearch(''); setTopic(''); setLevel(''); setAfter('');
+    if (preferences.accessibility.length) updatePreferences({ ...preferences, accessibility: [] });
+  }
 
   const agendaPanel = (large = false) => <section className={`agenda-panel ${large ? 'expanded' : ''}`} aria-label="Your saved agenda">
     <div className="panel-title"><div><span className="eyebrow">MADE FOR YOU</span><h2>Your agenda <span className="count">{savedIds.length}</span></h2></div><Icon name="calendar" size={22} /></div>
@@ -149,7 +164,7 @@ export default function App() {
       <nav aria-label="Main navigation">{([['discover', 'grid', 'Discover sessions'], ['agenda', 'calendar', 'My agenda'], ['organizer', 'settings', 'Organizer']] as const).map(([id, icon, label]) =>
         <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} aria-current={view === id ? 'page' : undefined} onClick={() => setView(id)}><Icon name={icon} />{label}{id === 'agenda' && !!savedIds.length && <span className="nav-count">{savedIds.length}</span>}</button>)}</nav>
       <button className="preferences-toggle" onClick={() => setPreferencesOpen(!preferencesOpen)} aria-expanded={preferencesOpen}><Icon name="settings" size={15} /> Interests & accessibility</button>
-      <div className="sidebar-preferences"><span className="eyebrow">YOUR INTERESTS</span><p>A little more you.<br />A better next recommendation.</p><div className="interest-list">{['kubernetes', 'networking', 'ebpf', 'security', 'observability', 'ai', 'platform', 'gitops'].map(t =>
+      <div className="sidebar-preferences"><span className="eyebrow">RECOMMENDATION INTERESTS</span><p>Prioritize these topics when a saved session changes.</p><div className="interest-list">{['kubernetes', 'networking', 'ebpf', 'security', 'observability', 'ai', 'platform', 'gitops'].map(t =>
         <button key={t} aria-pressed={preferences.topics.includes(t)} className={preferences.topics.includes(t) ? 'selected' : ''} disabled={!!busy || initializing} onClick={() => togglePreference('topics', t)}>{labels[t]}{preferences.topics.includes(t) && <Icon name="check" size={12} />}</button>)}</div></div>
       <fieldset className="accessibility"><legend>WHAT WORKS FOR YOU</legend><p>Use fictional venue metadata to filter sessions.</p>{['step_free', 'captions', 'hearing_loop', 'quiet_space'].map(a => <label key={a}><input type="checkbox" checked={preferences.accessibility.includes(a)} disabled={!!busy || initializing} onChange={() => togglePreference('accessibility', a)} />{labels[a]}</label>)}</fieldset>
       <div className="sidebar-bottom"><span className="avatar">D</span><div>Curious by default.<small>Your anonymous demo agenda</small></div></div>
@@ -157,17 +172,17 @@ export default function App() {
     <div className="page-shell">
       <header className="topbar"><div className="breadcrumb">Cloud Native Conference <span>/</span> <strong>{view === 'discover' ? 'Discover' : view === 'agenda' ? 'My agenda' : 'Organizer'}</strong></div><div className="topbar-right"><span className="demo-pill">DEMO DATA</span><label className="timezone"><span className="sr-only">Display time zone</span><Icon name="clock" size={15} /><select value={zone} onChange={e => setZone(e.target.value)}><option value="America/Denver">Mountain Time</option><option value="UTC">UTC</option><option value={Intl.DateTimeFormat().resolvedOptions().timeZone}>Your time zone</option></select></label></div></header>
       <main id="main" tabIndex={-1}>
-        {error && <div className="error-banner" role="alert"><Icon name="alert" /><span>{error}</span><button onClick={() => { setError(''); void refresh(true); }} aria-label="Retry loading"><Icon name="refresh" /></button></div>}
+        {error && <div className="error-banner" role="alert"><Icon name="alert" /><span>{error}</span><button onClick={() => { setActionError(''); setSearchError(''); setRefreshError(''); setSearchAttempt(n => n + 1); void refresh(true); }} aria-label="Retry loading"><Icon name="refresh" /></button></div>}
         <div className="notice" role="status" aria-live="polite">{notice}</div>
         {view === 'discover' && <>
           <section className="hero"><div><div className="eyebrow"><span className="small-line" /> FOLLOW YOUR CURIOSITY</div><h1>A change of plans.<br /><em>A world of possibilities.</em></h1><p>Find the talks that move you forward.<br className="mobile-break" /> We’ll take care of the detours.</p></div><div className="route-art" aria-hidden="true"><svg viewBox="0 0 240 180"><path d="M25 155V80q0-20 20-20h65q20 0 20 20v35q0 20 20 20h35q20 0 20-20V30" fill="none" stroke="#cad8b4" strokeWidth="26" strokeLinecap="round"/><path d="M25 155V80q0-20 20-20h65q20 0 20 20v35q0 20 20 20h35q20 0 20-20V30" fill="none" stroke="#f6f7ee" strokeWidth="2" strokeDasharray="5 6"/><circle cx="25" cy="155" r="8" fill="#254b3d"/><circle cx="205" cy="30" r="18" fill="#254b3d"/><path d="m197 31 6 6 10-12" fill="none" stroke="#d9edab" strokeWidth="3"/></svg><span className="art-caption">GOOD THINGS HAPPEN<br />OFF THE ORIGINAL PATH.</span></div></section>
-          <section className="search-box" aria-label="Find sessions"><form onSubmit={e => { e.preventDefault(); setSubmitted(query); }}><Icon name="search" size={24} /><label className="sr-only" htmlFor="session-search">Search sessions</label><input id="session-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="What would you love to learn?" maxLength={500} /><button className="primary" type="submit" disabled={initializing}>Find my sessions <Icon name="arrow" /></button></form><div className="search-examples"><span>A little inspiration</span>{['Kubernetes security', 'eBPF & networking', 'AI infrastructure'].map(q => <button key={q} onClick={() => performSearch(q)}>{q} <span>↗</span></button>)}</div></section>
+          <section className="search-box" aria-label="Find sessions"><form onSubmit={e => { e.preventDefault(); performSearch(query); }}><Icon name="search" size={24} /><label className="sr-only" htmlFor="session-search">Search sessions</label><input id="session-search" type="search" value={query} onChange={e => setQuery(e.target.value)} placeholder="What would you love to learn?" maxLength={500} /><button className="primary" type="submit" disabled={initializing}>Find my sessions <Icon name="arrow" /></button></form><div className="search-examples"><span>A little inspiration</span>{['Kubernetes security', 'eBPF & networking', 'AI infrastructure'].map(q => <button key={q} onClick={() => performSearch(q)}>{q} <span>↗</span></button>)}</div></section>
           {!!agenda?.affected.length && <div className="disruption-banner"><span className="disruption-icon"><Icon name="route" size={25} /></span><div><strong>A little detour is in order.</strong><p>{agenda.affected.length} saved session{agenda.affected.length === 1 ? ' has' : 's have'} changed. Let’s find your next best experience.</p></div><button className="primary" onClick={() => { setView('agenda'); void refresh(true); }}>Find my detour <Icon name="arrow" /></button></div>}
           <div className="content-grid"><section aria-label="Session results"><div className="section-heading"><div><span className="eyebrow">THE PROGRAM</span><h2>{submitted ? 'Your discoveries' : 'Find your next spark'} <span className="count">{results.length}</span></h2></div><span className="muted">30 fictional sessions · 5 rooms</span></div>
             <div className="filters"><label><span className="sr-only">Filter topic</span><select value={topic} onChange={e => setTopic(e.target.value)}><option value="">All topics</option>{(meta?.topics || []).map(t => <option value={t} key={t}>{labels[t]}</option>)}</select></label><label><span className="sr-only">Filter level</span><select value={level} onChange={e => setLevel(e.target.value)}><option value="">All levels</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label><label><span className="sr-only">Sessions starting after</span><select value={after} onChange={e => setAfter(e.target.value)}><option value="">Any time</option><option value="13:00">After lunch · 1 PM MT</option><option value="14:00">After 2 PM MT</option></select></label><label className="retrieval"><span className="sr-only">Search method</span><select value={mode} onChange={e => setMode(e.target.value)}><option value="hybrid">{meta?.semantic_search ? 'Meaning + keywords' : 'Keyword preview'}</option><option value="keyword">Keywords only</option>{meta?.semantic_search && <option value="semantic">Meaning only</option>}</select></label></div>
-            <div className="results-note" role="status">{searching ? 'Finding your next possibility…' : submitted ? `${results.length} available sessions for “${submitted}”` : 'A full day of fresh perspectives. Where will you start?'}</div>
-            <div className={`session-grid ${searching ? 'loading' : ''}`} aria-busy={searching}>{results.map(s => <article className={`session-card ${topicClass(s)}`} key={s.id} data-testid={`session-${s.id}`}><div className="card-top"><span className="topic-label">{labels[s.topics[0]]}</span><span className="level">{s.level}</span></div><h3>{s.title}</h3><p className="abstract">{s.abstract}</p><div className="speaker"><span className="speaker-avatar">{s.speaker.split(' ').at(-1)}</span>{s.speaker}<span className="fictional">fictional</span></div><div className="card-meta"><span><Icon name="clock" size={14} />{time(s.start, zone)} – {time(s.end, zone)}</span><span><Icon name="pin" size={14} />{s.room} · {s.building}</span></div><div className="card-bottom"><div className="access-tags">{s.accessibility_verified_demo && s.accessibility.step_free && <span title="Fictional demo metadata">Step-free</span>}{s.accessibility_verified_demo && s.accessibility.captions && <span title="Fictional demo metadata">CC</span>}{!s.accessibility_verified_demo && <span>Access unverified</span>}</div><button className={`save-button ${savedIds.includes(s.id) ? 'saved' : ''}`} disabled={!!busy || initializing} onClick={() => save(s)} aria-label={`${savedIds.includes(s.id) ? 'Remove' : 'Save'} ${s.title}`}><Icon name={savedIds.includes(s.id) ? 'check' : 'plus'} size={15} />{savedIds.includes(s.id) ? 'Saved' : 'Save session'}</button></div></article>)}</div>
-            {!searching && !results.length && <div className="empty-state"><Icon name="search" size={32} /><h3>A different path awaits.</h3><p>Try another phrase, a broader topic, or fewer filters.</p><button className="wide-button" onClick={() => { setQuery(''); setSubmitted(''); setTopic(''); setLevel(''); setAfter(''); }}>Clear search filters</button></div>}
+            <div className="results-note" role="status">{searching ? 'Finding your next possibility…' : submitted ? `${results.length} available sessions for “${submitted}”` : `${results.length} available sessions${topic || level || after || accessKey ? ' match your filters' : ' in the demo program'}`}</div>
+            <div className={`session-grid ${searching ? 'loading' : ''}`} aria-busy={searching}>{results.map(s => <article className={`session-card ${topicClass(s)}`} key={s.id} data-testid={`session-${s.id}`}><div className="card-top"><span className="topic-label">{labels[s.topics[0]]}</span><span className="level">{s.level}</span></div><h3>{s.title}</h3><p className="abstract">{s.abstract}</p><div className="speaker"><span className="speaker-avatar">{s.speaker.split(' ').at(-1)}</span>{s.speaker}<span className="fictional">fictional</span></div><div className="card-meta"><span><Icon name="clock" size={14} />{time(s.start, zone)} – {time(s.end, zone)}</span><span><Icon name="pin" size={14} />{s.room} · {s.building}</span></div><div className="card-bottom"><div className="access-tags">{s.accessibility_verified_demo && s.accessibility.step_free && <span title="Fictional demo metadata">Step-free</span>}{s.accessibility_verified_demo && s.accessibility.captions && <span title="Fictional demo metadata">CC</span>}{!s.accessibility_verified_demo && <span>Access unverified</span>}</div><button className={`save-button ${savedIds.includes(s.id) ? 'saved' : ''}`} disabled={!!busy || initializing || searching || (!savedIds.includes(s.id) && !!agenda?.save_conflicts?.[s.id])} aria-describedby={agenda?.save_conflicts?.[s.id] ? `conflict-${s.id}` : undefined} onClick={() => save(s)} aria-label={`${savedIds.includes(s.id) ? 'Remove' : 'Save'} ${s.title}`}><Icon name={savedIds.includes(s.id) ? 'check' : 'plus'} size={15} />{savedIds.includes(s.id) ? 'Saved' : agenda?.save_conflicts?.[s.id] ? 'Time conflict' : 'Save session'}</button></div>{agenda?.save_conflicts?.[s.id] && <p id={`conflict-${s.id}`} className="save-conflict">{agenda.save_conflicts[s.id]}</p>}</article>)}</div>
+            {!searching && !results.length && <div className="empty-state"><Icon name="search" size={32} /><h3>A different path awaits.</h3><p>Try another phrase, a broader topic, or fewer filters.</p>{!!accessKey && <p>Your selected accessibility needs are included in these filters.</p>}<button className="wide-button" disabled={!!busy || initializing} onClick={clearFilters}>Clear all filters</button>{!!accessKey && <p>This also clears your selected accessibility needs.</p>}</div>}
           </section>{agendaPanel()}</div>
         </>}
         {view === 'agenda' && <><section className="page-heading"><span className="eyebrow">A DAY THAT FITS YOU</span><h1>Your plans, <em>with possibilities.</em></h1><p>Keep the sessions you love. Find a fresh direction when things change.</p></section><div className="agenda-layout">{agendaPanel(true)}<section className="replan-panel" aria-label="Replacement recommendations"><div className="panel-title"><div><span className="eyebrow">YOUR NEXT BEST EXPERIENCE</span><h2>A good day has options.</h2></div><Icon name="route" size={25} /></div>
