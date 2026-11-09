@@ -96,13 +96,13 @@ def test_elastic_disruption_write_failure_does_not_update_session():
     with pytest.raises(RuntimeError, match="event write failed"):
         store.record_disruption(seed_sessions()[0], {"id": "event-one"}, (1, 1))
 
-    store.client.update.assert_not_called()
+    store.client.bulk.assert_not_called()
 
 
 def test_elastic_disruption_rolls_back_event_when_session_conflicts():
     store = ElasticStore.__new__(ElasticStore)
     store.client = Mock()
-    store.client.update.side_effect = ConflictError("conflict", None, None)
+    store.client.bulk.side_effect = ConflictError("conflict", None, None)
     event = {"id": "event-one"}
 
     with pytest.raises(ConcurrentWrite):
@@ -118,7 +118,7 @@ def test_elastic_disruption_rolls_back_event_when_session_conflicts():
 def test_elastic_disruption_rolls_back_event_on_session_failure_without_masking_it():
     store = ElasticStore.__new__(ElasticStore)
     store.client = Mock()
-    store.client.update.side_effect = RuntimeError("session update failed")
+    store.client.bulk.side_effect = RuntimeError("session update failed")
     store.client.options.return_value.delete.side_effect = RuntimeError("rollback failed")
     event = {"id": "event-one"}
 
@@ -127,3 +127,15 @@ def test_elastic_disruption_rolls_back_event_on_session_failure_without_masking_
 
     store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
         id=event["id"], refresh="wait_for")
+
+
+def test_elastic_session_bulk_update_reuses_embeddings_and_keeps_concurrency_guard():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.bulk.return_value = {"items": [{"update": {"status": 200}}]}
+    session = seed_sessions()[0]
+    store.record_disruption(session, {"id": "event-one"}, (7, 2))
+    operations = store.client.bulk.call_args.kwargs["operations"]
+    assert operations[0] == {"update": {"_index": INDICES["sessions"], "_id": session.id, "if_seq_no": 7, "if_primary_term": 2}}
+    assert operations[1] == {"doc": session.model_dump(mode="json")}
+    assert "semantic_text" not in operations[1]["doc"]

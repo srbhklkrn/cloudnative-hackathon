@@ -5,7 +5,7 @@ import threading
 from copy import deepcopy
 from uuid import uuid4
 
-from elasticsearch import ConflictError, Elasticsearch, NotFoundError, helpers
+from elasticsearch import ApiError, ConflictError, Elasticsearch, NotFoundError, helpers
 from opentelemetry import trace
 
 from .data import seed_sessions
@@ -200,8 +200,14 @@ class ElasticStore:
                 op_type="create", refresh="wait_for")
         try:
             with tracer.start_as_current_span("detour.elasticsearch.update_session", record_exception=False, set_status_on_exception=False):
-                self.client.update(index=INDICES["sessions"], id=session.id, doc=session.model_dump(mode="json"),
-                    if_seq_no=version[0], if_primary_term=version[1], refresh="wait_for")
+                # Bulk partial updates reuse semantic embeddings when semantic_text is omitted.
+                result = self.client.bulk(operations=[{"update": {"_index": INDICES["sessions"], "_id": session.id,
+                    "if_seq_no": version[0], "if_primary_term": version[1]}}, {"doc": session.model_dump(mode="json")}],
+                    refresh="wait_for")
+                update = result["items"][0]["update"]
+                if update["status"] >= 300:
+                    error = ConflictError if update["status"] == 409 else ApiError
+                    raise error("Session update failed", result.meta, update)
         except Exception as exc:
             try:
                 self.client.options(ignore_status=404).delete(index=INDICES["disruptions"], id=event["id"], refresh="wait_for")
