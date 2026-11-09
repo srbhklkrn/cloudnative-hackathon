@@ -1,0 +1,24 @@
+# Never commit these: the repo is public.
+*kubeconfig*
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+node_modules/
+npm-debug.log*
+.DS_Store
+ .env
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+test-results/
+playwright-report/
+.archify/
