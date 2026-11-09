@@ -6,3 +6,12 @@
 **/.env.*
 **/*.pem
 **/*.key
+.venv
+**/__pycache__
+frontend/dist
+frontend/test-results
+frontend/playwright-report
+.archify
+.pytest_cache
+test-results
+playwright-report

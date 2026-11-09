@@ -5,9 +5,8 @@ metadata:
   labels:
     app: app
 spec:
-  # Remove this line when you turn on the HPA (examples/hpa), or Argo CD and
-  # the autoscaler will keep resetting each other.
-  replicas: 2
+  # shortcut: one worker serializes demo mutations; add distributed transactions before scaling writes.
+  replicas: 1
   selector:
     matchLabels:
       app: app
@@ -16,6 +15,7 @@ spec:
       labels:
         app: app
     spec:
+      automountServiceAccountToken: false
       containers:
         - name: app
           image: app
@@ -25,13 +25,49 @@ spec:
           env:
             - name: TEAM_NAME
               value: "bumblebee"
+            - name: DETOUR_STORE
+              value: elasticsearch
+            - name: DETOUR_PUBLIC_ORIGIN
+              value: https://bumblebee.cnh.radarhq.io
+            - name: ELASTICSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: detour-credentials
+                  key: ELASTICSEARCH_URL
+            - name: ELASTICSEARCH_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: detour-credentials
+                  key: ELASTICSEARCH_API_KEY
+            - name: ELASTICSEARCH_INFERENCE_ID
+              value: .jina-embeddings-v5-text-small
+            - name: OTEL_SERVICE_NAME
+              value: detour-api
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: detour-credentials
+                  key: OTEL_EXPORTER_OTLP_ENDPOINT
+                  optional: true
+            - name: OTEL_EXPORTER_OTLP_HEADERS
+              valueFrom:
+                secretKeyRef:
+                  name: detour-credentials
+                  key: OTEL_EXPORTER_OTLP_HEADERS
+                  optional: true
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
+              memory: 256Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
           readinessProbe:
             httpGet:
               path: /readyz
