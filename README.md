@@ -135,9 +135,9 @@ npm --prefix frontend run test:e2e
 uv run --env-file /secure/path/credentials.env python -m scripts.verify_elastic
 ```
 
-Start the app before browser tests. `DETOUR_BASE_URL` changes their target. Browser
-tests **reset the shared synthetic dataset**; run them against a dedicated demo
-instance while no one is presenting. CI runs backend tests, frontend compilation,
+Start a memory preview or the isolated Elasticsearch target below before browser
+tests. `DETOUR_BASE_URL` changes their target. Reset-based cases **clear all state
+on the test target** and refuse the shared Elasticsearch demo. CI runs backend tests, frontend compilation,
 and Chromium workflows using explicit memory mode, with no sponsor credentials.
 Live Elasticsearch verification separately checks Jina retrieval and persistence.
 
