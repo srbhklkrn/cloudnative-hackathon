@@ -50,42 +50,39 @@ export default function App() {
   const [initializing, setInitializing] = useState(true);
   const [editing, setEditing] = useState<string | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
-  const refreshing = useRef(false);
-  const pending = useRef(false);
+  const inflight = useRef<Promise<void> | null>(null);
   const planKey = useRef('');
   const preferences = agenda?.agenda.preferences || emptyPreferences;
   const savedIds = agenda?.agenda.session_ids || [];
   const stamp = allSessions.map(s => `${s.id}:${s.revision}`).join(',');
   const accessKey = preferences.accessibility.join(',');
 
-  const refresh = useCallback(async (force = false) => {
-    if (refreshing.current) {
-      if (force) pending.current = true;
-      return;
+  const refresh = useCallback(async function runRefresh(force = false): Promise<void> {
+    if (inflight.current) {
+      if (!force) return inflight.current;
+      await inflight.current.catch(() => {});
+      return runRefresh(true);
     }
-    refreshing.current = true;
-    try {
-      // Establish the HttpOnly attendee cookie before concurrent requests or writes.
-      const nextAgenda = await api<AgendaResponse>('/api/agenda');
-      setAgenda(nextAgenda);
-      const [nextMeta, data] = await Promise.all([api<Meta>('/api/meta'), api<{ sessions: Session[]; disruptions: Event[] }>('/api/sessions')]);
-      setMeta(nextMeta); setAllSessions(data.sessions); setEvents(data.disruptions);
-      const key = JSON.stringify([nextAgenda.affected, nextAgenda.agenda.preferences, nextAgenda.agenda.session_ids]);
-      if (!nextAgenda.affected.length) { setPlan(null); planKey.current = ''; }
-      else if (force || key !== planKey.current) {
-        const nextPlan = await api<Plan>('/api/replan', {});
-        setPlan(nextPlan); planKey.current = key;
-      }
-      setError('');
-    } catch (e) { setError((e as Error).message); }
-    finally {
-      refreshing.current = false;
-      setInitializing(false);
-      if (pending.current) {
-        pending.current = false;
-        void refresh(true);
-      }
-    }
+    const request = (async () => {
+      try {
+        // Establish the HttpOnly attendee cookie before concurrent requests or writes.
+        const nextAgenda = await api<AgendaResponse>('/api/agenda');
+        setAgenda(nextAgenda);
+        const [nextMeta, data] = await Promise.all([api<Meta>('/api/meta'), api<{ sessions: Session[]; disruptions: Event[] }>('/api/sessions')]);
+        setMeta(nextMeta); setAllSessions(data.sessions); setEvents(data.disruptions);
+        const key = JSON.stringify([nextAgenda.affected, nextAgenda.agenda.preferences, nextAgenda.agenda.session_ids]);
+        if (!nextAgenda.affected.length) { setPlan(null); planKey.current = ''; }
+        else if (force || key !== planKey.current) {
+          const nextPlan = await api<Plan>('/api/replan', {});
+          setPlan(nextPlan); planKey.current = key;
+        }
+        setError('');
+      } catch (e) { setError((e as Error).message); }
+      finally { setInitializing(false); }
+    })();
+    const current = request.finally(() => { inflight.current = null; });
+    inflight.current = current;
+    return current;
   }, []);
 
   useEffect(() => {
