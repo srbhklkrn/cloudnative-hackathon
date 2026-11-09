@@ -1,5 +1,21 @@
 import { expect, test } from '@playwright/test';
 
+test('a keyboard search entered during startup runs after initialization', async ({ page }) => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/agenda', async route => {
+    if (route.request().method() === 'GET') await gate;
+    await route.continue();
+  });
+  await page.goto('/');
+  try {
+    await page.getByRole('searchbox').fill('networking');
+    await page.getByRole('searchbox').press('Enter');
+  } finally { release(); }
+  await expect(page.locator('.results-note')).toContainText('available sessions for “networking”');
+  await expect(page.locator('.session-card')).not.toHaveCount(0);
+});
+
 test('the same search can be submitted again after a failure', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.session-card')).toHaveCount(30);

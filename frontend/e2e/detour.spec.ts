@@ -1,8 +1,8 @@
 import { expect, test } from '@playwright/test';
+import { resetDemo } from './reset-demo';
 
 test.beforeEach(async ({ request }) => {
-  const response = await request.post('/api/demo/reset', { data: {} });
-  expect(response.ok()).toBeTruthy();
+  await resetDemo(request);
 });
 
 test('attendee recovers from a room filling up and accepts a replacement', async ({ page, context }) => {

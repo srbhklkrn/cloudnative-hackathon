@@ -136,6 +136,8 @@ class ElasticStore:
         self.client.close()
 
     def reset(self):
+        # Pending agenda writes must be visible before delete-by-query takes its version snapshot.
+        self.client.indices.refresh(index=list(INDICES.values()))
         for index in INDICES.values():
             self.client.delete_by_query(index=index, query={"term": {"demo": True}}, refresh=True, conflicts="abort")
         self._seed()

@@ -135,11 +135,41 @@ npm --prefix frontend run test:e2e
 uv run --env-file /secure/path/credentials.env python -m scripts.verify_elastic
 ```
 
-Start the app before browser tests. `DETOUR_BASE_URL` changes their target. Browser
-tests **reset the shared synthetic dataset**; run them against a dedicated demo
-instance while no one is presenting. CI runs backend tests, frontend compilation,
+Start a memory preview or the isolated Elasticsearch target below before browser
+tests. `DETOUR_BASE_URL` changes their target. Reset-based cases **clear all state
+on the test target** and refuse the shared Elasticsearch demo. CI runs backend tests, frontend compilation,
 and Chromium workflows using explicit memory mode, with no sponsor credentials.
 Live Elasticsearch verification separately checks Jina retrieval and persistence.
+
+For the complete browser suite against real Elasticsearch, start an isolated target:
+
+```sh
+uv run --env-file /secure/path/credentials.env python -m scripts.browser_test_server
+```
+
+Once it prints its isolated dataset name and listens on port 8081, run in another terminal:
+
+```sh
+DETOUR_BASE_URL=http://127.0.0.1:8081 npm --prefix frontend run test:e2e
+```
+
+This target uses three fresh `detour-demo-browser-<UUID>-*` indices, the real Jina
+model, and the current built frontend. Stop it normally to delete those exact indices.
+Reset-based tests refuse an Elasticsearch target without its test-scope marker;
+they must never reset the shared demo. Concurrent runs need separate Playwright
+output folders (`--output=...`). Failure traces and screenshots are retained.
+
+Browser coverage includes organizer full/cancel/reopen controls, invalid and valid
+time/location edits, independent attendee state, recommendation rejection and
+acceptance, consecutive disruptions, changes from another organizer, no alternatives,
+reset confirmation/cancellation, mobile controls, keyboard/time zones, search modes,
+and automated WCAG AA checks on attendee, organizer, agenda and recovery states.
+The semantic-search case is skipped in memory mode and runs on the isolated
+Elasticsearch target.
+
+Reset refreshes pending writes before taking delete-by-query snapshots, preventing
+stale-version conflicts after recent agenda updates. See the
+[Elasticsearch delete-by-query semantics](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-delete-by-query).
 
 The browser scenario saves a session, changes availability from another page,
 waits for attendee polling, accepts a replacement and checks the persisted agenda.
