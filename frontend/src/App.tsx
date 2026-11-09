@@ -51,6 +51,7 @@ export default function App() {
   const [editing, setEditing] = useState<string | null>(null);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const refreshing = useRef(false);
+  const pending = useRef(false);
   const planKey = useRef('');
   const preferences = agenda?.agenda.preferences || emptyPreferences;
   const savedIds = agenda?.agenda.session_ids || [];
@@ -58,7 +59,10 @@ export default function App() {
   const accessKey = preferences.accessibility.join(',');
 
   const refresh = useCallback(async (force = false) => {
-    if (refreshing.current) return;
+    if (refreshing.current) {
+      if (force) pending.current = true;
+      return;
+    }
     refreshing.current = true;
     try {
       // Establish the HttpOnly attendee cookie before concurrent requests or writes.
@@ -74,7 +78,14 @@ export default function App() {
       }
       setError('');
     } catch (e) { setError((e as Error).message); }
-    finally { refreshing.current = false; setInitializing(false); }
+    finally {
+      refreshing.current = false;
+      setInitializing(false);
+      if (pending.current) {
+        pending.current = false;
+        void refresh(true);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -101,9 +112,7 @@ export default function App() {
     try {
       await api(path, body);
       setNotice(message);
-      // Let an in-flight poll finish before refreshing mutation results.
-      if (refreshing.current) planKey.current = '';
-      else await refresh(true);
+      await refresh(true);
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(''); }
   }
