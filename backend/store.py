@@ -150,7 +150,8 @@ class ElasticStore:
         return Session.model_validate(result["_source"]), (result["_seq_no"], result["_primary_term"])
 
     def search(self, query: str, mode: str = "hybrid") -> list[tuple[Session, float]]:
-        with tracer.start_as_current_span("detour.semantic_search" if mode != "keyword" else "detour.keyword_search"):
+        with tracer.start_as_current_span("detour.semantic_search" if mode != "keyword" else "detour.keyword_search",
+                                         record_exception=False, set_status_on_exception=False):
             if not query.strip():
                 return [(s, 0.0) for s in self.all_sessions()]
             queries = []
@@ -193,11 +194,13 @@ class ElasticStore:
     def record_disruption(self, session: Session, event: dict, version):
         # Compare-and-swap prevents lost organizer changes, even during overlapping rollouts.
         try:
-            self.client.update(index=INDICES["sessions"], id=session.id, doc=session.model_dump(mode="json"),
-                if_seq_no=version[0], if_primary_term=version[1], refresh="wait_for")
+            with tracer.start_as_current_span("detour.elasticsearch.update_session", record_exception=False, set_status_on_exception=False):
+                self.client.update(index=INDICES["sessions"], id=session.id, doc=session.model_dump(mode="json"),
+                    if_seq_no=version[0], if_primary_term=version[1], refresh="wait_for")
         except ConflictError as exc:
             raise ConcurrentWrite from exc
-        self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True}, refresh="wait_for")
+        with tracer.start_as_current_span("detour.elasticsearch.record_disruption", record_exception=False, set_status_on_exception=False):
+            self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True}, refresh="wait_for")
 
     def disruptions(self):
         result = self.client.search(index=INDICES["disruptions"], query={"bool": {"filter": [{"term": {"demo": True}}],
