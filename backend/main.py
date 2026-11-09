@@ -18,6 +18,7 @@ from pydantic import ValidationError
 from .models import AgendaChange, CONFERENCE_TZ, DisruptionChange, Preferences, Session, TOPICS
 from .scheduling import affected, conflict, rank_replacements, unavailable
 from .store import ConcurrentWrite, ElasticStore, MemoryStore
+from . import telemetry
 
 logger = logging.getLogger("detour")
 tracer = trace.get_tracer("detour")
@@ -43,6 +44,10 @@ def create_app(store=None):
 
     @asynccontextmanager
     async def lifespan(app):
+        try:
+            telemetry.setup_telemetry()
+        except ValueError:
+            logger.error("Telemetry configuration is invalid; header values omitted")
         app.state.ready, app.state.retry_after = False, 0
         if store is None:
             from starlette.concurrency import run_in_threadpool
@@ -52,8 +57,11 @@ def create_app(store=None):
         yield
         if getattr(app.state, "store", None):
             app.state.store.close()
+        telemetry.flush_telemetry()
 
-    app = FastAPI(title="Detour", version="0.1.0", lifespan=lifespan)
+    # Our route-only middleware avoids duplicate framework spans and sensitive attributes.
+    app = FastAPI(title="Detour", version="0.1.0", lifespan=lifespan,
+                  telemetry={"tracing": False, "metrics": False, "logs": False})
 
     @app.middleware("http")
     async def boundaries(request, call_next):
@@ -73,6 +81,8 @@ def create_app(store=None):
         if context.is_valid:
             response.headers["X-Trace-Id"] = format(context.trace_id, "032x")
         return response
+
+    app.middleware("http")(telemetry.instrument_request)
 
     def database():
         if not getattr(app.state, "ready", False) and time.monotonic() >= getattr(app.state, "retry_after", 0):
@@ -98,6 +108,9 @@ def create_app(store=None):
         return JSONResponse({"detail": "Agenda changed in another request. Refresh and try again."}, status_code=409)
 
     async def datastore_error(request, exc):
+        telemetry.datastore_errors.add(1, {"error.type": type(exc).__name__})
+        if request.url.path == "/api/replan":
+            telemetry.replans.add(1, {"outcome": "failure"})
         logger.warning("Datastore operation failed (%s)", type(exc).__name__)
         return JSONResponse({"detail": "Elasticsearch could not complete the request. Try again shortly."}, status_code=503)
 
@@ -121,7 +134,7 @@ def create_app(store=None):
                 "store": getattr(db, "mode", "unconfigured"), "ready": getattr(app.state, "ready", False),
                 "semantic_search": getattr(db, "mode", None) == "elasticsearch" and getattr(app.state, "ready", False),
                 "inference_id": getattr(db, "inference_id", None), "topics": TOPICS,
-                "telemetry_configured": bool(os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
+                "telemetry_configured": telemetry._providers is not None,
                 "conference_timezone": "America/Denver", "conference_date": "2026-11-09"}
 
     @app.get("/api/sessions")
@@ -143,7 +156,8 @@ def create_app(store=None):
             raise HTTPException(422, "Unknown accessibility filter")
         if topic and topic not in TOPICS:
             raise HTTPException(422, "Unknown topic")
-        with tracer.start_as_current_span("detour.search_sessions"):
+        with tracer.start_as_current_span("detour.search_sessions", record_exception=False, set_status_on_exception=False):
+            started = time.perf_counter()
             try:
                 results = db.search(q, mode)
             except ValueError as exc:
@@ -151,6 +165,7 @@ def create_app(store=None):
             results = [(s, score) for s, score in results if not unavailable(s, preferences)
                        and (not topic or topic in s.topics) and (not after or s.start >= after)
                        and (not before or s.end <= before) and (not level or s.level == level)]
+            telemetry.search_duration.record(time.perf_counter() - started, {"search.mode": mode, "store": db.mode})
             return {"results": [{"session": s, "score": score} for s, score in results],
                     "mode": mode if db.mode == "elasticsearch" else "keyword-preview", "store": db.mode, "demo": True}
 
@@ -242,11 +257,13 @@ def create_app(store=None):
             event = {"id": uuid4().hex, "session_id": session.id, "event_type": change.event_type,
                      "timestamp": datetime.now(UTC).isoformat(), "previous": previous, "current": session.model_dump(mode="json")}
             db.record_disruption(session, event, version)
+            telemetry.disruptions.add(1, {"event.type": change.event_type})
             return {"session": session, "disruption": event, "demo": True}
 
     @app.post("/api/replan")
     def replan(token=Depends(attendee), db=Depends(database)):
-        with tracer.start_as_current_span("detour.replan_agenda"):
+        with tracer.start_as_current_span("detour.replan_agenda", record_exception=False, set_status_on_exception=False):
+            started = time.perf_counter()
             agenda, _ = db.get_agenda(token)
             sessions = {s.id: s for s in db.all_sessions()}
             disruptions = affected(agenda, sessions)
@@ -257,6 +274,9 @@ def create_app(store=None):
                 original = item["session"]
                 candidates = db.search(original.description, "hybrid")
                 recommendations = rank_replacements(original, candidates, agenda, sessions)
+            telemetry.replan_duration.record(time.perf_counter() - started, {"store": db.mode})
+            telemetry.replans.add(1, {"outcome": "recommended" if recommendations else "no_alternative" if item else "unaffected"})
+            telemetry.alternatives.record(len(recommendations), {"store": db.mode})
             return {"disruption": item, "remaining_disruptions": len(disruptions), "recommendations": recommendations,
                     "message": "No compatible alternative is available. Try adjusting your preferences or removing a conflicting session." if item and not recommendations else None,
                     "mode": "hybrid" if db.mode == "elasticsearch" else "keyword-preview", "demo": True}

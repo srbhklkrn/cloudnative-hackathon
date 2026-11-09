@@ -2,7 +2,7 @@ from datetime import timedelta
 from unittest.mock import Mock
 
 import pytest
-from elasticsearch import ConflictError
+from elasticsearch import ApiError, ConflictError
 from pydantic import ValidationError
 
 from backend.data import seed_sessions
@@ -96,20 +96,60 @@ def test_elastic_disruption_write_failure_does_not_update_session():
     with pytest.raises(RuntimeError, match="event write failed"):
         store.record_disruption(seed_sessions()[0], {"id": "event-one"}, (1, 1))
 
-    store.client.update.assert_not_called()
+    store.client.bulk.assert_not_called()
 
 
 def test_elastic_disruption_rolls_back_event_when_session_conflicts():
     store = ElasticStore.__new__(ElasticStore)
     store.client = Mock()
-    store.client.update.side_effect = ConflictError("conflict", None, None)
+    store.client.bulk.side_effect = ConflictError("conflict", None, None)
     event = {"id": "event-one"}
 
     with pytest.raises(ConcurrentWrite):
         store.record_disruption(seed_sessions()[0], event, (1, 1))
 
     store.client.index.assert_called_once_with(index=INDICES["disruptions"], id=event["id"],
-        document={**event, "demo": True}, op_type="create", refresh="wait_for")
+        document={**event, "demo": True}, op_type="create")
     store.client.options.assert_called_once_with(ignore_status=404)
     store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
         id=event["id"], refresh="wait_for")
+
+
+@pytest.mark.parametrize("status,error", [(409, ConcurrentWrite), (404, ApiError)])
+def test_elastic_disruption_item_error_rolls_back_event(status, error):
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.bulk.return_value = Mock(meta=Mock(),
+        __getitem__=lambda self, key: {"items": [{"update": {"status": status}}]}[key])
+
+    with pytest.raises(error):
+        store.record_disruption(seed_sessions()[0], {"id": "event-one"}, (1, 1))
+
+    store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
+        id="event-one", refresh="wait_for")
+
+
+def test_elastic_disruption_rolls_back_event_on_session_failure_without_masking_it():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.bulk.side_effect = RuntimeError("session update failed")
+    store.client.options.return_value.delete.side_effect = RuntimeError("rollback failed")
+    event = {"id": "event-one"}
+
+    with pytest.raises(RuntimeError, match="session update failed"):
+        store.record_disruption(seed_sessions()[0], event, (1, 1))
+
+    store.client.options.return_value.delete.assert_called_once_with(index=INDICES["disruptions"],
+        id=event["id"], refresh="wait_for")
+
+
+def test_elastic_session_bulk_update_reuses_embeddings_and_keeps_concurrency_guard():
+    store = ElasticStore.__new__(ElasticStore)
+    store.client = Mock()
+    store.client.bulk.return_value = {"items": [{"update": {"status": 200}}]}
+    session = seed_sessions()[0]
+    store.record_disruption(session, {"id": "event-one"}, (7, 2))
+    operations = store.client.bulk.call_args.kwargs["operations"]
+    assert operations[0] == {"update": {"_index": INDICES["sessions"], "_id": session.id, "if_seq_no": 7, "if_primary_term": 2}}
+    assert operations[1] == {"doc": session.model_dump(mode="json")}
+    assert "semantic_text" not in operations[1]["doc"]

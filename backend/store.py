@@ -1,16 +1,18 @@
+import logging
 import os
 import re
 import threading
 from copy import deepcopy
 from uuid import uuid4
 
-from elasticsearch import ConflictError, Elasticsearch, NotFoundError, helpers
+from elasticsearch import ApiError, ConflictError, Elasticsearch, NotFoundError, helpers
 from opentelemetry import trace
 
 from .data import seed_sessions
 from .models import Agenda, Session
 
 tracer = trace.get_tracer("detour")
+logger = logging.getLogger("detour")
 # Fixed names ensure a public demo reset can never target another application's data.
 INDICES = {name: f"detour-demo-{name}-v1" for name in ("sessions", "agendas", "disruptions")}
 
@@ -150,7 +152,8 @@ class ElasticStore:
         return Session.model_validate(result["_source"]), (result["_seq_no"], result["_primary_term"])
 
     def search(self, query: str, mode: str = "hybrid") -> list[tuple[Session, float]]:
-        with tracer.start_as_current_span("detour.semantic_search" if mode != "keyword" else "detour.keyword_search"):
+        with tracer.start_as_current_span("detour.semantic_search" if mode != "keyword" else "detour.keyword_search",
+                                         record_exception=False, set_status_on_exception=False):
             if not query.strip():
                 return [(s, 0.0) for s in self.all_sessions()]
             queries = []
@@ -184,22 +187,37 @@ class ElasticStore:
 
     def save_agenda(self, token: str, agenda: Agenda, version):
         options = {"op_type": "create"} if version is None else {"if_seq_no": version[0], "if_primary_term": version[1]}
+        # Agendas use real-time GET by ID, so waiting for search refresh adds no consistency.
         try:
             self.client.index(index=INDICES["agendas"], id=token,
-                document={**agenda.model_dump(mode="json"), "demo": True}, refresh="wait_for", **options)
+                document={**agenda.model_dump(mode="json"), "demo": True}, **options)
         except ConflictError as exc:
             raise ConcurrentWrite from exc
 
     def record_disruption(self, session: Session, event: dict, version):
         # Compare-and-swap prevents lost organizer changes, even during overlapping rollouts.
-        self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True},
-            op_type="create", refresh="wait_for")
+        # Event history is eventually visible; session search visibility is awaited below.
+        with tracer.start_as_current_span("detour.elasticsearch.record_disruption", record_exception=False, set_status_on_exception=False):
+            self.client.index(index=INDICES["disruptions"], id=event["id"], document={**event, "demo": True},
+                op_type="create")
         try:
-            self.client.update(index=INDICES["sessions"], id=session.id, doc=session.model_dump(mode="json"),
-                if_seq_no=version[0], if_primary_term=version[1], refresh="wait_for")
-        except ConflictError as exc:
-            self.client.options(ignore_status=404).delete(index=INDICES["disruptions"], id=event["id"], refresh="wait_for")
-            raise ConcurrentWrite from exc
+            with tracer.start_as_current_span("detour.elasticsearch.update_session", record_exception=False, set_status_on_exception=False):
+                # Bulk partial updates reuse semantic embeddings when semantic_text is omitted.
+                result = self.client.bulk(operations=[{"update": {"_index": INDICES["sessions"], "_id": session.id,
+                    "if_seq_no": version[0], "if_primary_term": version[1]}}, {"doc": session.model_dump(mode="json")}],
+                    refresh="wait_for")
+                update = result["items"][0]["update"]
+                if update["status"] >= 300:
+                    error = ConflictError if update["status"] == 409 else ApiError
+                    raise error("Session update failed", result.meta, update)
+        except Exception as exc:
+            try:
+                self.client.options(ignore_status=404).delete(index=INDICES["disruptions"], id=event["id"], refresh="wait_for")
+            except Exception as rollback_exc:
+                logger.warning("Disruption rollback failed (%s)", type(rollback_exc).__name__)
+            if isinstance(exc, ConflictError):
+                raise ConcurrentWrite from exc
+            raise
 
     def disruptions(self):
         result = self.client.search(index=INDICES["disruptions"], query={"bool": {"filter": [{"term": {"demo": True}}],
